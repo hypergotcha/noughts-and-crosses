@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Noughts &amp; Crosses</title>
+<title>Snake</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&display=swap" rel="stylesheet">
 <style>
-  html, body { margin: 0; height: 100%; background: #0d0b24; overflow: hidden; }
+  html, body { margin: 0; height: 100%; background: #0d0b24; overflow: hidden; touch-action: none; }
   #game { width: 100%; height: 100%; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
@@ -17,16 +17,25 @@
 <div id="game"></div>
 <script>
 const W = 600, H = 900;
-const CELL = 150, GAP = 12, BX = W / 2, BY = 505;
-const COLORS = { X: 0xff5d73, O: 0x4dd6ff };
-const CSS = { X: '#ff5d73', O: '#4dd6ff' };
-const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+const N = 8, CELL = 62, GAP = 4, PITCH = CELL + GAP;
+const BOARD = N * PITCH - GAP, BX = (W - BOARD) / 2, BY = 250;
+const HEAD = 0x7dffb6, TAIL = 0x1a8f86, FOOD = 0xff5d73;
 const FONT = 'Fredoka, system-ui, sans-serif';
+const START_MS = 230, MIN_MS = 95, SPEEDUP = 7;
+const DIRS = {
+  up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 },
+};
+const KEYS = {
+  ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down',
+  ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
+};
 
-const cellPos = i => ({
-  x: BX + (i % 3 - 1) * (CELL + GAP),
-  y: BY + (Math.floor(i / 3) - 1) * (CELL + GAP),
-});
+const cellCenter = (x, y) => ({ x: BX + x * PITCH + CELL / 2, y: BY + y * PITCH + CELL / 2 });
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
 
 // Synthesised sound effects — no audio files needed.
 const Sfx = {
@@ -51,39 +60,18 @@ const Sfx = {
     osc.start(t);
     osc.stop(t + dur + 0.05);
   },
-  x()     { this.tone(480, 0.16, 'triangle', 0.25, 0, 820); },
-  o()     { this.tone(620, 0.2, 'sine', 0.3, 0, 360); },
-  click() { this.tone(700, 0.07, 'square', 0.06); },
-  win() {
-    [523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.28, 'triangle', 0.22, i * 0.09));
-    this.tone(1568, 0.6, 'sine', 0.12, 0.38);
+  turn()     { this.tone(1100, 0.03, 'sine', 0.04); },
+  eat(n)     { this.tone(500 + n * 18, 0.14, 'triangle', 0.25, 0, 900 + n * 24); },
+  start()    { [392, 523, 659].forEach((f, i) => this.tone(f, 0.14, 'triangle', 0.18, i * 0.07)); },
+  gameOver() {
+    this.tone(300, 0.5, 'sawtooth', 0.12, 0, 70);
+    [440, 370, 311, 262].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.16, 0.1 + i * 0.12));
   },
-  lose() { [440, 370, 311, 262].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.18, i * 0.12)); },
-  draw() { [392, 349].forEach((f, i) => this.tone(f, 0.3, 'sawtooth', 0.07, i * 0.16)); },
+  win() {
+    [523, 659, 784, 1047, 1319].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.2, i * 0.09));
+    this.tone(1568, 0.7, 'sine', 0.12, 0.45);
+  },
 };
-
-function winnerOf(b) {
-  for (const line of LINES) {
-    const [a, c, d] = line;
-    if (b[a] && b[a] === b[c] && b[a] === b[d]) return { player: b[a], line };
-  }
-  return null;
-}
-
-function minimax(b, player, depth = 0) {
-  const w = winnerOf(b);
-  if (w) return { score: w.player === 'O' ? 10 - depth : depth - 10 };
-  if (b.every(Boolean)) return { score: 0 };
-  let best = { score: player === 'O' ? -Infinity : Infinity };
-  for (let i = 0; i < 9; i++) {
-    if (b[i]) continue;
-    b[i] = player;
-    const s = minimax(b, player === 'O' ? 'X' : 'O', depth + 1).score;
-    b[i] = null;
-    if (player === 'O' ? s > best.score : s < best.score) best = { score: s, idx: i };
-  }
-  return best;
-}
 
 class Game extends Phaser.Scene {
   constructor() { super('game'); }
@@ -92,13 +80,10 @@ class Game extends Phaser.Scene {
     this.makeTextures();
     this.makeBackground();
 
-    this.scores = { X: 0, O: 0, D: 0 };
-    this.vsCpu = true;
-    this.starter = 'X';
-    this.marks = [];
+    this.best = Number(store.get('snake-best')) || 0;
 
-    this.add.text(W / 2, 72, 'Noughts & Crosses', {
-      fontFamily: FONT, fontSize: '50px', fontStyle: 'bold', color: '#ffffff',
+    this.add.text(W / 2, 64, 'Snake', {
+      fontFamily: FONT, fontSize: '56px', fontStyle: 'bold', color: '#ffffff',
     }).setOrigin(0.5).setShadow(0, 4, 'rgba(0,0,0,0.4)', 12);
 
     this.muteBtn = this.add.text(W - 34, 34, '🔊', { fontSize: '28px' })
@@ -108,51 +93,48 @@ class Game extends Phaser.Scene {
         this.muteBtn.setText(Sfx.muted ? '🔇' : '🔊');
       });
 
-    this.scoreCards = {
-      X: this.makeScoreCard(W / 2 - 170, 160, 'X', CSS.X),
-      D: this.makeScoreCard(W / 2, 160, 'DRAW', '#c9c3ff'),
-      O: this.makeScoreCard(W / 2 + 170, 160, 'O', CSS.O),
+    this.cards = {
+      score: this.makeCard(W / 2 - 170, 160, 'SCORE', '#7dffb6'),
+      length: this.makeCard(W / 2, 160, 'LENGTH', '#c9c3ff'),
+      best: this.makeCard(W / 2 + 170, 160, 'BEST', '#ffc857'),
     };
+    this.cards.best.value.setText(String(this.best));
 
-    this.status = this.add.text(W / 2, 252, '', {
-      fontFamily: FONT, fontSize: '30px', fontStyle: 'bold', color: '#ffffff',
-    }).setOrigin(0.5);
-
-    this.tiles = [];
-    for (let i = 0; i < 9; i++) {
-      const { x, y } = cellPos(i);
-      const tile = this.add.graphics({ x, y });
-      this.drawTile(tile, 0xffffff, 0.05, 0.12);
-      this.tiles.push(tile);
-      this.add.zone(x, y, CELL, CELL).setInteractive({ useHandCursor: true })
-        .on('pointerover', () => { if (this.canClick(i)) this.drawTile(tile, COLORS[this.turn], 0.12, 0.4); })
-        .on('pointerout', () => { if (!this.board[i] && !this.over) this.drawTile(tile, 0xffffff, 0.05, 0.12); })
-        .on('pointerdown', () => { if (this.canClick(i)) this.play(i); });
+    const board = this.add.graphics();
+    board.fillStyle(0xffffff, 0.04).fillRoundedRect(BX - 12, BY - 12, BOARD + 24, BOARD + 24, 24)
+      .lineStyle(2, 0xffffff, 0.14).strokeRoundedRect(BX - 12, BY - 12, BOARD + 24, BOARD + 24, 24);
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        board.fillStyle(0xffffff, (x + y) % 2 ? 0.045 : 0.075)
+          .fillRoundedRect(BX + x * PITCH, BY + y * PITCH, CELL, CELL, 12);
+      }
     }
 
+    this.foodG = this.add.graphics();
+    this.addGlow(this.foodG, FOOD, 6);
+    this.snakeG = this.add.graphics();
+    this.addGlow(this.snakeG, HEAD, 3);
+
     this.emitter = this.add.particles(0, 0, 'spark', {
-      speed: { min: 120, max: 460 },
+      speed: { min: 100, max: 380 },
       angle: { min: 0, max: 360 },
-      lifespan: { min: 600, max: 1100 },
-      scale: { start: 1, end: 0 },
-      gravityY: 350,
+      lifespan: { min: 450, max: 900 },
+      scale: { start: 0.9, end: 0 },
+      gravityY: 250,
       blendMode: 'ADD',
       emitting: false,
     }).setDepth(10);
 
-    this.makeButton(W / 2 - 135, 820, 230, 'New Game', () => this.newGame());
-    this.modeBtn = this.makeButton(W / 2 + 135, 820, 230, '', () => {
-      this.vsCpu = !this.vsCpu;
-      this.updateModeLabel();
-      this.scores = { X: 0, O: 0, D: 0 };
-      Object.keys(this.scores).forEach(k => this.scoreCards[k].value.setText('0'));
-      this.starter = 'X';
-      this.newGame();
-    });
-    this.updateModeLabel();
+    this.add.text(W / 2, H - 52, 'Arrows / WASD or swipe  ·  Space to pause  ·  Edges wrap around', {
+      fontFamily: FONT, fontSize: '17px', color: '#ffffff',
+    }).setOrigin(0.5).setAlpha(0.5);
 
-    this.newGame(true);
+    this.makeOverlay();
+    this.setupInput();
+    this.reset();
   }
+
+  // ---------- visuals ----------
 
   makeTextures() {
     const g = this.make.graphics({ add: false });
@@ -197,7 +179,7 @@ class Game extends Phaser.Scene {
 
   makeBackground() {
     this.add.image(0, 0, 'bg').setOrigin(0);
-    const tints = [0xff5d73, 0x4dd6ff, 0x9b7bff, 0xffc857];
+    const tints = [0x7dffb6, 0x4dd6ff, 0x9b7bff, 0xff5d73];
     for (let i = 0; i < 14; i++) {
       const orb = this.add.image(
         Phaser.Math.Between(0, W), Phaser.Math.Between(0, H), 'orb'
@@ -215,13 +197,17 @@ class Game extends Phaser.Scene {
     }
   }
 
-  makeScoreCard(x, y, label, color) {
+  addGlow(g, color, strength) {
+    if (g.postFX) return g.postFX.addGlow(color, strength, 0, false, 0.1, 14);
+  }
+
+  makeCard(x, y, label, color) {
     const c = this.add.container(x, y);
     const bg = this.add.graphics()
       .fillStyle(0xffffff, 0.07).fillRoundedRect(-75, -48, 150, 96, 18)
       .lineStyle(2, 0xffffff, 0.12).strokeRoundedRect(-75, -48, 150, 96, 18);
     const title = this.add.text(0, -24, label, {
-      fontFamily: FONT, fontSize: '22px', fontStyle: 'bold', color,
+      fontFamily: FONT, fontSize: '20px', fontStyle: 'bold', color,
     }).setOrigin(0.5);
     const value = this.add.text(0, 16, '0', {
       fontFamily: FONT, fontSize: '40px', fontStyle: 'bold', color: '#ffffff',
@@ -230,199 +216,259 @@ class Game extends Phaser.Scene {
     return { container: c, value };
   }
 
-  makeButton(x, y, w, label, onClick) {
-    const h = 64;
-    const c = this.add.container(x, y);
-    const bg = this.add.graphics();
-    const paint = a => bg.clear()
-      .fillStyle(0xffffff, a).fillRoundedRect(-w / 2, -h / 2, w, h, 32)
-      .lineStyle(2, 0xffffff, 0.3).strokeRoundedRect(-w / 2, -h / 2, w, h, 32);
-    paint(0.1);
-    const text = this.add.text(0, 0, label, {
-      fontFamily: FONT, fontSize: '24px', fontStyle: 'bold', color: '#ffffff',
+  setCard(key, v, bump = false) {
+    const card = this.cards[key];
+    card.value.setText(String(v));
+    if (bump) this.tweens.add({ targets: card.container, scale: 1.1, duration: 120, yoyo: true });
+  }
+
+  makeOverlay() {
+    const cx = W / 2, cy = BY + BOARD / 2;
+    this.overlay = this.add.container(cx, cy).setDepth(20);
+    const panel = this.add.graphics()
+      .fillStyle(0x0d0b24, 0.78).fillRoundedRect(-220, -95, 440, 190, 26)
+      .lineStyle(2, 0xffffff, 0.2).strokeRoundedRect(-220, -95, 440, 190, 26);
+    this.overlayTitle = this.add.text(0, -32, '', {
+      fontFamily: FONT, fontSize: '42px', fontStyle: 'bold', color: '#ffffff',
     }).setOrigin(0.5);
-    c.add([bg, text]).setSize(w, h).setInteractive({ useHandCursor: true })
-      .on('pointerover', () => { paint(0.18); this.tweens.add({ targets: c, scale: 1.05, duration: 120 }); })
-      .on('pointerout', () => { paint(0.1); this.tweens.add({ targets: c, scale: 1, duration: 120 }); })
-      .on('pointerdown', () => {
-        Sfx.click();
-        this.tweens.add({ targets: c, scale: 0.94, duration: 70, yoyo: true });
-        onClick();
-      });
-    return { container: c, text };
+    this.overlaySub = this.add.text(0, 32, '', {
+      fontFamily: FONT, fontSize: '20px', color: '#ffffff', align: 'center',
+    }).setOrigin(0.5).setAlpha(0.8);
+    this.overlay.add([panel, this.overlayTitle, this.overlaySub]);
   }
 
-  updateModeLabel() {
-    this.modeBtn.text.setText(this.vsCpu ? '🤖  vs CPU' : '👥  2 Players');
+  showOverlay(title, sub, color = '#ffffff') {
+    this.overlayTitle.setText(title).setColor(color);
+    this.overlaySub.setText(sub);
+    this.overlay.setVisible(true).setAlpha(0).setScale(0.85);
+    this.tweens.add({ targets: this.overlay, alpha: 1, scale: 1, duration: 260, ease: 'Back.Out' });
   }
 
-  drawTile(g, color, fillAlpha, strokeAlpha) {
-    const s = CELL / 2;
-    g.clear()
-      .fillStyle(color, fillAlpha).fillRoundedRect(-s, -s, CELL, CELL, 22)
-      .lineStyle(2, color === 0xffffff ? 0xffffff : color, strokeAlpha).strokeRoundedRect(-s, -s, CELL, CELL, 22);
-  }
-
-  canClick(i) {
-    return !this.over && !this.board[i] && !(this.vsCpu && this.turn === 'O');
-  }
-
-  setStatus(text, color = '#ffffff') {
-    this.status.setText(text).setColor(color).setScale(0.8);
-    this.tweens.add({ targets: this.status, scale: 1, duration: 250, ease: 'Back.Out' });
-  }
-
-  turnText() {
-    if (this.vsCpu) return this.turn === 'X' ? 'Your turn' : 'CPU is thinking…';
-    return `${this.turn}'s turn`;
-  }
-
-  newGame(first = false) {
-    if (this.cpuTimer) this.cpuTimer.remove();
-    this.board = Array(9).fill(null);
-    this.turn = this.starter;
-    this.over = false;
-
-    const old = [...this.marks, this.winLine].filter(Boolean);
+  hideOverlay() {
     this.tweens.add({
-      targets: old, alpha: 0, scale: 0.4, duration: 200,
-      onComplete: () => old.forEach(o => o.destroy()),
-    });
-    this.marks = [];
-    this.winLine = null;
-
-    this.tiles.forEach((t, i) => {
-      this.drawTile(t, 0xffffff, 0.05, 0.12);
-      t.setScale(first ? 0 : 0.85);
-      this.tweens.add({ targets: t, scale: 1, duration: 400, delay: i * 40, ease: 'Back.Out' });
-    });
-
-    this.setStatus(this.turnText(), CSS[this.turn]);
-    this.maybeCpuMove();
-  }
-
-  maybeCpuMove() {
-    if (!this.vsCpu || this.over || this.turn !== 'O') return;
-    this.cpuTimer = this.time.delayedCall(550, () => {
-      const empty = this.board.map((v, i) => v ? null : i).filter(v => v !== null);
-      const idx = Math.random() < 0.2
-        ? Phaser.Utils.Array.GetRandom(empty)
-        : minimax(this.board.slice(), 'O').idx;
-      this.play(idx);
+      targets: this.overlay, alpha: 0, scale: 0.9, duration: 160,
+      onComplete: () => this.overlay.setVisible(false),
     });
   }
 
-  play(i) {
-    const p = this.turn;
-    this.board[i] = p;
-    this.drawTile(this.tiles[i], COLORS[p], 0.1, 0.35);
-    this.marks.push(p === 'X' ? this.drawX(i) : this.drawO(i));
-    p === 'X' ? Sfx.x() : Sfx.o();
-
-    const win = winnerOf(this.board);
-    if (win) return this.finish(win);
-    if (this.board.every(Boolean)) return this.finish(null);
-
-    this.turn = p === 'X' ? 'O' : 'X';
-    this.setStatus(this.turnText(), CSS[this.turn]);
-    this.maybeCpuMove();
-  }
-
-  addGlow(g, color) {
-    if (g.postFX) g.postFX.addGlow(color, 4, 0, false, 0.1, 12);
-  }
-
-  drawX(i) {
-    const { x, y } = cellPos(i);
-    const g = this.add.graphics({ x, y });
-    this.addGlow(g, COLORS.X);
-    const s = 42, p = { t: 0 };
-    const stroke = (x1, y1, x2, y2, k) => {
-      const ex = x1 + (x2 - x1) * k, ey = y1 + (y2 - y1) * k;
-      g.lineStyle(16, COLORS.X).lineBetween(x1, y1, ex, ey);
-      g.fillStyle(COLORS.X).fillCircle(x1, y1, 8).fillCircle(ex, ey, 8);
+  drawSnake(flash = null) {
+    const g = this.snakeG.clear();
+    const n = this.snake.length;
+    const pad = 5, size = CELL - pad * 2;
+    const head = Phaser.Display.Color.ValueToColor(HEAD), tail = Phaser.Display.Color.ValueToColor(TAIL);
+    const colorAt = i => {
+      if (flash !== null) return flash;
+      const c = Phaser.Display.Color.Interpolate.ColorWithColor(head, tail, Math.max(n - 1, 1), i);
+      return Phaser.Display.Color.GetColor(c.r, c.g, c.b);
     };
-    this.tweens.add({
-      targets: p, t: 2, duration: 320, ease: 'Sine.Out',
-      onUpdate: () => {
-        g.clear();
-        stroke(-s, -s, s, s, Math.min(p.t, 1));
-        if (p.t > 1) stroke(s, -s, -s, s, p.t - 1);
-      },
-    });
-    return g;
-  }
 
-  drawO(i) {
-    const { x, y } = cellPos(i);
-    const g = this.add.graphics({ x, y });
-    this.addGlow(g, COLORS.O);
-    const p = { t: 0 };
-    this.tweens.add({
-      targets: p, t: 1, duration: 360, ease: 'Sine.Out',
-      onUpdate: () => {
-        const start = Phaser.Math.DegToRad(-90);
-        g.clear().lineStyle(16, COLORS.O)
-          .beginPath().arc(0, 0, 44, start, start + Math.PI * 2 * p.t).strokePath();
-      },
-    });
-    return g;
-  }
-
-  finish(win) {
-    this.over = true;
-    this.starter = this.starter === 'X' ? 'O' : 'X';
-
-    if (!win) {
-      this.scores.D++;
-      this.bumpScore('D');
-      this.setStatus("It's a draw!", '#c9c3ff');
-      Sfx.draw();
-      this.cameras.main.shake(200, 0.004);
-      return;
+    // Draw tail first so the head sits on top; bridge the gap between
+    // neighbouring segments unless the pair straddles a wrapped edge.
+    for (let i = n - 1; i >= 0; i--) {
+      const s = this.snake[i], p = cellCenter(s.x, s.y);
+      g.fillStyle(colorAt(i), 1);
+      if (i < n - 1) {
+        const t = this.snake[i + 1];
+        if (Math.abs(t.x - s.x) + Math.abs(t.y - s.y) === 1) {
+          const q = cellCenter(t.x, t.y), hz = p.y === q.y;
+          g.fillRect(
+            hz ? Math.min(p.x, q.x) : p.x - size / 2,
+            hz ? p.y - size / 2 : Math.min(p.y, q.y),
+            hz ? Math.abs(q.x - p.x) : size,
+            hz ? size : Math.abs(q.y - p.y));
+        }
+      }
+      const r = i === 0 ? 18 : 14;
+      g.fillRoundedRect(p.x - size / 2, p.y - size / 2, size, size, r);
     }
 
-    const { player, line } = win;
-    this.scores[player]++;
-    this.bumpScore(player);
-    const text = this.vsCpu ? (player === 'X' ? 'You win! 🎉' : 'CPU wins!') : `${player} wins! 🎉`;
-    this.setStatus(text, CSS[player]);
-    (this.vsCpu && player === 'O') ? Sfx.lose() : Sfx.win();
-
-    line.forEach(j => this.drawTile(this.tiles[j], COLORS[player], 0.28, 0.9));
-    this.tweens.add({
-      targets: line.map(j => this.marks.find(m => m.x === cellPos(j).x && m.y === cellPos(j).y)),
-      scale: 1.15, duration: 220, yoyo: true, repeat: 2, ease: 'Sine.InOut', delay: 300,
+    // Eyes look the way the snake is heading.
+    const h = this.snake[0], p = cellCenter(h.x, h.y), d = this.dir;
+    const fwd = 9, side = 11;
+    [-1, 1].forEach(k => {
+      const ex = p.x + d.x * fwd + (d.y ? k * side : 0);
+      const ey = p.y + d.y * fwd + (d.x ? k * side : 0);
+      g.fillStyle(0xffffff, 1).fillCircle(ex, ey, 7);
+      g.fillStyle(0x10132b, 1).fillCircle(ex + d.x * 2.5, ey + d.y * 2.5, 3.6);
     });
+  }
 
-    const a = cellPos(line[0]), b = cellPos(line[2]);
-    const ext = 0.2;
-    const x1 = a.x - (b.x - a.x) * ext, y1 = a.y - (b.y - a.y) * ext;
-    const x2 = b.x + (b.x - a.x) * ext, y2 = b.y + (b.y - a.y) * ext;
-    const g = this.winLine = this.add.graphics().setDepth(5);
-    this.addGlow(g, 0xffffff);
-    const p = { t: 0 };
+  drawFood() {
+    const p = cellCenter(this.food.x, this.food.y);
+    this.foodG.clear().setPosition(p.x, p.y)
+      .fillStyle(FOOD, 1).fillCircle(0, 2, 17)
+      .fillStyle(0xffffff, 0.55).fillCircle(-6, -4, 5)
+      .fillStyle(0x7dffb6, 1).fillEllipse(6, -17, 12, 7);
+    this.tweens.killTweensOf(this.foodG);
+    this.foodG.setScale(0);
     this.tweens.add({
-      targets: p, t: 1, duration: 380, delay: 250, ease: 'Cubic.Out',
-      onUpdate: () => {
-        const ex = x1 + (x2 - x1) * p.t, ey = y1 + (y2 - y1) * p.t;
-        g.clear().lineStyle(10, 0xffffff).lineBetween(x1, y1, ex, ey)
-          .fillStyle(0xffffff).fillCircle(x1, y1, 5).fillCircle(ex, ey, 5);
-      },
+      targets: this.foodG, scale: 1, duration: 260, ease: 'Back.Out',
       onComplete: () => {
-        this.emitter.setParticleTint(COLORS[player]);
-        line.forEach(j => { const c = cellPos(j); this.emitter.explode(30, c.x, c.y); });
-        this.emitter.setParticleTint(0xffffff);
-        this.emitter.explode(30, W / 2, BY);
-        this.cameras.main.shake(180, 0.006);
+        this.tweens.add({
+          targets: this.foodG, scale: 1.12, duration: 520, yoyo: true, repeat: -1, ease: 'Sine.InOut',
+        });
       },
     });
   }
 
-  bumpScore(key) {
-    const { value, container } = this.scoreCards[key];
-    value.setText(String(this.scores[key]));
-    this.tweens.add({ targets: container, scale: 1.12, duration: 140, yoyo: true, ease: 'Sine.Out' });
+  // ---------- input ----------
+
+  setupInput() {
+    this.input.keyboard.on('keydown', e => {
+      if (KEYS[e.code]) { e.preventDefault(); this.handleDir(KEYS[e.code]); }
+      else if (e.code === 'Space' || e.code === 'KeyP' || e.code === 'Enter') { e.preventDefault(); this.handleAction(); }
+    });
+
+    let start = null;
+    this.input.on('pointerdown', (p, over) => {
+      start = over.includes(this.muteBtn) ? null : { x: p.x, y: p.y };
+    });
+    this.input.on('pointerup', p => {
+      if (!start) return;
+      const dx = p.x - start.x, dy = p.y - start.y;
+      start = null;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return this.handleAction();
+      this.handleDir(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+    });
+  }
+
+  handleDir(name) {
+    const d = DIRS[name];
+    if (this.state === 'over') return this.canRestart && this.reset();
+    if (this.state === 'ready') {
+      // The body trails to the left at the start, so ignore a reverse.
+      if (d.x === -this.dir.x && d.y === -this.dir.y) return this.begin();
+      this.dir = d;
+      return this.begin();
+    }
+    if (this.state === 'paused') this.togglePause();
+    const last = this.queue.length ? this.queue[this.queue.length - 1] : this.dir;
+    if (d === last || (d.x === -last.x && d.y === -last.y) || this.queue.length >= 3) return;
+    this.queue.push(d);
+    Sfx.turn();
+  }
+
+  handleAction() {
+    if (this.state === 'ready') this.begin();
+    else if (this.state === 'over') { if (this.canRestart) this.reset(); }
+    else this.togglePause();
+  }
+
+  togglePause() {
+    if (this.state === 'playing') {
+      this.state = 'paused';
+      this.showOverlay('Paused', 'Press Space or tap to continue');
+    } else if (this.state === 'paused') {
+      this.state = 'playing';
+      this.hideOverlay();
+    }
+  }
+
+  // ---------- game loop ----------
+
+  reset() {
+    this.snake = [{ x: 3, y: 4 }, { x: 2, y: 4 }, { x: 1, y: 4 }];
+    this.dir = DIRS.right;
+    this.queue = [];
+    this.score = 0;
+    this.stepMs = START_MS;
+    this.acc = 0;
+    this.state = 'ready';
+    this.setCard('score', 0);
+    this.setCard('length', this.snake.length);
+    this.spawnFood();
+    this.drawSnake();
+    this.showOverlay('Ready?', 'Press an arrow key or swipe to start', '#7dffb6');
+  }
+
+  begin() {
+    this.state = 'playing';
+    this.acc = 0;
+    Sfx.start();
+    this.hideOverlay();
+  }
+
+  spawnFood() {
+    const taken = new Set(this.snake.map(s => s.y * N + s.x));
+    const free = [];
+    for (let i = 0; i < N * N; i++) if (!taken.has(i)) free.push(i);
+    if (!free.length) return false;
+    const i = Phaser.Utils.Array.GetRandom(free);
+    this.food = { x: i % N, y: Math.floor(i / N) };
+    this.drawFood();
+    return true;
+  }
+
+  update(time, delta) {
+    if (this.state !== 'playing') return;
+    this.acc += delta;
+    while (this.acc >= this.stepMs && this.state === 'playing') {
+      this.acc -= this.stepMs;
+      this.step();
+    }
+  }
+
+  step() {
+    if (this.queue.length) this.dir = this.queue.shift();
+    const head = this.snake[0];
+    const nx = (head.x + this.dir.x + N) % N, ny = (head.y + this.dir.y + N) % N;
+    const eating = nx === this.food.x && ny === this.food.y;
+    const body = eating ? this.snake : this.snake.slice(0, -1);
+    if (body.some(s => s.x === nx && s.y === ny)) return this.gameOver();
+
+    this.snake.unshift({ x: nx, y: ny });
+    if (!eating) this.snake.pop();
+    this.drawSnake();
+    if (eating) this.eat();
+  }
+
+  eat() {
+    this.score++;
+    this.stepMs = Math.max(MIN_MS, this.stepMs - SPEEDUP);
+    this.setCard('score', this.score, true);
+    this.setCard('length', this.snake.length, true);
+    Sfx.eat(this.score);
+
+    const p = cellCenter(this.food.x, this.food.y);
+    this.emitter.setParticleTint(FOOD);
+    this.emitter.explode(26, p.x, p.y);
+
+    if (this.score > this.best) {
+      this.best = this.score;
+      store.set('snake-best', this.best);
+      this.setCard('best', this.best, true);
+    }
+
+    if (!this.spawnFood()) this.win();
+  }
+
+  gameOver() {
+    this.state = 'over';
+    Sfx.gameOver();
+    this.cameras.main.shake(260, 0.012);
+    let flashes = 0;
+    this.time.addEvent({
+      delay: 110, repeat: 5,
+      callback: () => this.drawSnake(++flashes % 2 ? FOOD : null),
+    });
+    this.canRestart = false;
+    this.time.delayedCall(700, () => {
+      this.canRestart = true;
+      this.showOverlay('Game over', `Score ${this.score}  ·  press any key or tap to retry`, '#ff5d73');
+    });
+  }
+
+  win() {
+    this.state = 'over';
+    this.canRestart = true;
+    this.foodG.clear();
+    Sfx.win();
+    this.emitter.setParticleTint(HEAD);
+    for (let i = 0; i < 6; i++) {
+      this.time.delayedCall(i * 150, () => this.emitter.explode(40,
+        Phaser.Math.Between(BX, BX + BOARD), Phaser.Math.Between(BY, BY + BOARD)));
+    }
+    this.showOverlay('You win! 🎉', 'The snake filled the whole board', '#7dffb6');
   }
 }
 
