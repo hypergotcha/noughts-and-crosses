@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Snake</title>
+<title>Bishi Bashi</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Rubik:wght@700;900&display=swap" rel="stylesheet">
 <style>
-  html, body { margin: 0; height: 100%; background: #0d0b24; overflow: hidden; touch-action: none; }
+  html, body { margin: 0; height: 100%; background: #fff1d0; overflow: hidden; touch-action: none; user-select: none; }
   #game { width: 100%; height: 100%; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.80.1/phaser.min.js"></script>
@@ -17,27 +17,51 @@
 <div id="game"></div>
 <script>
 const W = 600, H = 900;
-const N = 8, CELL = 62, GAP = 4, PITCH = CELL + GAP;
-const BOARD = N * PITCH - GAP, BX = (W - BOARD) / 2, BY = 250;
-const HEAD = 0x7dffb6, TAIL = 0x1a8f86, FOOD = 0xff5d73;
-const FONT = 'Fredoka, system-ui, sans-serif';
-const START_MS = 230, MIN_MS = 95, SPEEDUP = 7;
-const DIRS = {
-  up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 },
+const INK = '#1b1b1b', INKN = 0x1b1b1b;
+const COL = { r: 0xff3b3b, b: 0x2f7bff, g: 0x1fc56b };
+const CSSC = { r: '#ff3b3b', b: '#2f7bff', g: '#1fc56b' };
+const NAME = { r: 'RED', b: 'BLUE', g: 'GREEN' };
+const KS = ['r', 'b', 'g'];
+const YEL = 0xffd23f, ORANGE = 0xffb02e, CREAM = 0xfff1d0, PINK = 0xff9cba;
+const PLAY = { x: 30, y: 125, w: 540, h: 510 };
+const CX = W / 2, CY = PLAY.y + PLAY.h / 2;
+const BTNX = [125, 300, 475], BTNY = 782, TIMER_Y = 652;
+const HEAD = '"Dela Gothic One", Impact, sans-serif', BODY = 'Rubik, system-ui, sans-serif';
+const B = { font: BODY, weight: '900', stroke: 0, shadow: 0 };
+const KEYMAP = {
+  Digit1: 'r', Numpad1: 'r', KeyA: 'r', KeyJ: 'r', ArrowLeft: 'r',
+  Digit2: 'b', Numpad2: 'b', KeyS: 'b', KeyK: 'b', ArrowDown: 'b', ArrowUp: 'b',
+  Digit3: 'g', Numpad3: 'g', KeyD: 'g', KeyL: 'g', ArrowRight: 'g',
 };
-const KEYS = {
-  ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down',
-  ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
-};
-
-const cellCenter = (x, y) => ({ x: BX + x * PITCH + CELL / 2, y: BY + y * PITCH + CELL / 2 });
+const KEYHINT = ['A / 1 / ←', 'S / 2 / ↓', 'D / 3 / →'];
+const rand = Phaser.Math.Between, pick = a => Phaser.Utils.Array.GetRandom(a);
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
 
-// Synthesised sound effects — no audio files needed.
+// Flat comic panel: hard offset shadow, fill, thick ink outline.
+function panel(g, x, y, w, h, fill, r = 16, sh = 8, lw = 5) {
+  if (sh) g.fillStyle(INKN).fillRoundedRect(x + sh, y + sh, w, h, r);
+  g.fillStyle(fill).fillRoundedRect(x, y, w, h, r);
+  g.lineStyle(lw, INKN).strokeRoundedRect(x, y, w, h, r);
+  return g;
+}
+
+function star(g, cx, cy, points, rOut, rIn, fill, sh = 10) {
+  const pts = [];
+  for (let i = 0; i < points * 2; i++) {
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2, r = i % 2 ? rIn : rOut;
+    pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+  }
+  if (sh) g.fillStyle(INKN).fillPoints(pts.map(p => ({ x: p.x + sh, y: p.y + sh })), true);
+  g.fillStyle(fill).fillPoints(pts, true);
+  g.lineStyle(6, INKN).strokePoints(pts, true);
+  return g;
+}
+
+// Chiptune-style synthesised sound effects.
 const Sfx = {
   ctx: null,
   muted: false,
@@ -45,7 +69,7 @@ const Sfx = {
     if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (this.ctx.state === 'suspended') this.ctx.resume();
   },
-  tone(freq, dur, type = 'sine', vol = 0.2, delay = 0, slideTo = null) {
+  tone(freq, dur, type = 'square', vol = 0.1, delay = 0, slideTo = null) {
     if (this.muted) return;
     this.init();
     const ctx = this.ctx, t = ctx.currentTime + delay;
@@ -54,421 +78,709 @@ const Sfx = {
     osc.frequency.setValueAtTime(freq, t);
     if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
     gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+    gain.gain.exponentialRampToValueAtTime(vol, t + 0.005);
+    gain.gain.setValueAtTime(vol, t + dur * 0.6);
     gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     osc.connect(gain).connect(ctx.destination);
     osc.start(t);
     osc.stop(t + dur + 0.05);
   },
-  turn()     { this.tone(1100, 0.03, 'sine', 0.04); },
-  eat(n)     { this.tone(500 + n * 18, 0.14, 'triangle', 0.25, 0, 900 + n * 24); },
-  start()    { [392, 523, 659].forEach((f, i) => this.tone(f, 0.14, 'triangle', 0.18, i * 0.07)); },
-  gameOver() {
-    this.tone(300, 0.5, 'sawtooth', 0.12, 0, 70);
-    [440, 370, 311, 262].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.16, 0.1 + i * 0.12));
+  noise(dur, vol = 0.2, delay = 0, freq = 1200) {
+    if (this.muted) return;
+    this.init();
+    const ctx = this.ctx, t = ctx.currentTime + delay;
+    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource(), filter = ctx.createBiquadFilter(), gain = ctx.createGain();
+    src.buffer = buf;
+    filter.type = 'bandpass';
+    filter.frequency.value = freq;
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(filter).connect(gain).connect(ctx.destination);
+    src.start(t);
   },
-  win() {
-    [523, 659, 784, 1047, 1319].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.2, i * 0.09));
-    this.tone(1568, 0.7, 'sine', 0.12, 0.45);
-  },
+  btn(k)   { this.tone({ r: 330, b: 392, g: 494 }[k], 0.05, 'square', 0.05); },
+  note(k)  { this.tone({ r: 523, b: 659, g: 784 }[k], 0.22, 'square', 0.09); },
+  pump(p)  { this.tone(180 + p * 500, 0.08, 'square', 0.08, 0, 260 + p * 700); },
+  pop()    { this.noise(0.3, 0.5, 0, 900); this.tone(160, 0.2, 'square', 0.12, 0, 40); },
+  good()   { this.tone(988, 0.06, 'square', 0.07); this.tone(1319, 0.1, 'square', 0.07, 0.06); },
+  now()    { this.tone(1400, 0.18, 'square', 0.12); this.noise(0.15, 0.3, 0, 3000); },
+  tick()   { this.tone(1800, 0.03, 'square', 0.05); },
+  ding()   { this.tone(1047, 0.25, 'triangle', 0.15); },
+  cluck()  { this.tone(1100, 0.05, 'square', 0.035, 0, 700); },
+  oink()   { this.tone(170, 0.12, 'sawtooth', 0.06, 0, 130); },
+  intro()  { [659, 659, 988].forEach((f, i) => this.tone(f, i === 2 ? 0.25 : 0.08, 'square', 0.08, i * 0.11)); },
+  clear()  { [523, 659, 784, 1047].forEach((f, i) => this.tone(f, i === 3 ? 0.3 : 0.08, 'square', 0.09, i * 0.07)); },
+  miss()   { this.tone(220, 0.15, 'sawtooth', 0.12); this.tone(147, 0.4, 'sawtooth', 0.12, 0.15, 110); },
+  speedUp(){ this.tone(200, 0.5, 'sawtooth', 0.08, 0, 1400); [784, 988, 1175].forEach((f, i) => this.tone(f, 0.1, 'square', 0.07, 0.5 + i * 0.08)); },
+  start()  { [392, 523, 659, 784, 1047].forEach((f, i) => this.tone(f, 0.09, 'square', 0.08, i * 0.06)); },
+  over()   { [523, 494, 466, 440].forEach((f, i) => this.tone(f, i === 3 ? 0.6 : 0.22, 'square', 0.09, i * 0.25)); },
 };
 
-class Game extends Phaser.Scene {
-  constructor() { super('game'); }
+// ---------------- mini games ----------------
+
+class Pump {
+  constructor(s, d) {
+    Object.assign(this, { s, d, n: 0, last: null });
+    this.title = 'PUMP IT!';
+    this.hint = 'Alternate RED and BLUE\nto blow up the balloon!';
+    this.keys = ['r', 'b'];
+    this.need = 14 + d * 4;
+    this.timeMs = 5000;
+  }
+  start() {
+    const s = this.s;
+    this.g = s.add.graphics();
+    this.label = s.txt(CX, PLAY.y + 44, '', 30, '#ffffff');
+    this.prompt = s.txt(CX, PLAY.y + PLAY.h - 22, 'RED · BLUE · RED · BLUE…', 18, INK, B);
+    s.L.add([this.g, this.label, this.prompt]);
+    this.draw();
+  }
+  draw() {
+    const g = this.g.clear(), k = this.n / this.need;
+    const rx = 34 + k * 120, ry = 40 + k * 136;
+    const base = PLAY.y + PLAY.h - 78, cy = base - 34 - ry;
+    panel(g, CX - 70, base, 140, 34, YEL, 8, 5);
+    g.lineStyle(5, INKN).lineBetween(CX, base, CX, cy + ry + 12);
+    g.fillStyle(INKN).fillEllipse(CX + 9, cy + 9, rx * 2, ry * 2);
+    g.fillStyle(COL.r).fillEllipse(CX, cy, rx * 2, ry * 2);
+    g.lineStyle(6, INKN).strokeEllipse(CX, cy, rx * 2, ry * 2);
+    g.fillStyle(0xffffff, 0.85).fillEllipse(CX - rx * 0.42, cy - ry * 0.45, rx * 0.34, ry * 0.42);
+    g.fillStyle(COL.r).fillTriangle(CX - 11, cy + ry + 15, CX + 11, cy + ry + 15, CX, cy + ry - 3);
+    g.lineStyle(4, INKN).strokeTriangle(CX - 11, cy + ry + 15, CX + 11, cy + ry + 15, CX, cy + ry - 3);
+    this.label.setText(`${this.n} / ${this.need}`);
+  }
+  onButton(k) {
+    if (k === 'g' || k === this.last) return;
+    this.last = k;
+    this.n++;
+    Sfx.pump(this.n / this.need);
+    if (this.n < this.need) {
+      this.draw();
+      this.s.cameras.main.shake(50, 0.003);
+      return;
+    }
+    const g = this.g.clear();
+    star(g, CX, CY + 10, 14, 200, 120, YEL);
+    this.label.setText('');
+    this.s.L.add(this.s.txt(CX, CY + 10, 'POP!', 80, CSSC.r, { stroke: 12 }));
+    Sfx.pop();
+    this.s.result(true, 'Balloon popped!');
+  }
+}
+
+class QuickDraw {
+  constructor(s, d) {
+    Object.assign(this, { s, d, armed: null });
+    this.title = 'QUICK DRAW!';
+    this.hint = 'Wait for it… then hit ANY\nbutton the instant it says NOW!';
+    this.keys = KS;
+    this.window = Math.max(260, 600 - d * 60);
+    this.timeMs = 7500;
+    this.hideBar = true;
+  }
+  start() {
+    const s = this.s;
+    this.g = s.add.graphics();
+    this.t = s.txt(CX, CY, 'WAIT…', 72, '#ffffff', { stroke: 12 });
+    this.sub = s.txt(CX, CY + 150, 'Don’t press too early!', 22, INK, B);
+    s.L.add([this.g, this.t, this.sub]);
+    this.drawSign(false);
+    s.tweens.add({ targets: this.t, scale: 1.06, duration: 380, yoyo: true, repeat: -1 });
+    s.later(rand(1500, 4200), () => {
+      this.armed = s.time.now;
+      this.drawSign(true);
+      s.tweens.killTweensOf(this.t);
+      this.t.setText('NOW!').setColor(CSSC.r).setScale(1.3);
+      this.sub.setText('');
+      Sfx.now();
+      s.cameras.main.shake(120, 0.012);
+      s.later(this.window, () => s.result(false, 'Too slow!'));
+    });
+  }
+  drawSign(on) {
+    const g = this.g.clear();
+    if (on) star(g, CX, CY, 16, 240, 165, YEL);
+    else panel(g, CX - 200, CY - 90, 400, 180, 0x3d3a5c, 24, 10, 6);
+  }
+  onButton() {
+    if (!this.armed) return this.s.result(false, 'Too early!');
+    const ms = Math.round(this.s.time.now - this.armed);
+    this.bonus = Math.max(0, this.window - ms);
+    this.s.result(true, `${ms} ms reaction`);
+  }
+}
+
+class InkColor {
+  constructor(s, d) {
+    Object.assign(this, { s, d, n: 0 });
+    this.title = 'INK COLOR!';
+    this.hint = 'Press the COLOR of the ink —\nnot what the word says!';
+    this.keys = KS;
+    this.need = Math.min(14, 6 + d * 2);
+    this.timeMs = Math.max(5000, 7500 - d * 300);
+  }
+  start() {
+    const s = this.s;
+    const g = panel(s.add.graphics(), CX - 220, CY - 100, 440, 200, 0xffffff, 24, 10, 6);
+    this.word = s.txt(CX, CY, '', 84, '#ffffff', { stroke: 12 });
+    this.count = s.txt(CX, PLAY.y + 44, '', 30, '#ffffff');
+    s.L.add([g, this.word, this.count]);
+    this.next();
+  }
+  next() {
+    const word = pick(KS);
+    let ink = pick(KS);
+    if (Math.random() < 0.8) while (ink === word) ink = pick(KS);
+    this.ink = ink;
+    this.s.tweens.killTweensOf(this.word);
+    this.word.setText(NAME[word]).setColor(CSSC[ink]).setScale(0.4);
+    this.s.tweens.add({ targets: this.word, scale: 1, duration: 130, ease: 'Back.Out' });
+    this.count.setText(`${this.n} / ${this.need}`);
+  }
+  onButton(k) {
+    if (k !== this.ink) return this.s.result(false, `The ink was ${NAME[this.ink]}!`);
+    this.n++;
+    Sfx.good();
+    if (this.n >= this.need) return this.s.result(true, 'Sharp eyes!');
+    this.next();
+  }
+}
+
+class StopClock {
+  constructor(s, d) {
+    Object.assign(this, { s, d });
+    this.target = d === 0 ? 3 : pick([2, 3, 4, 5]);
+    this.title = `STOP AT ${this.target}.00!`;
+    this.hint = 'The clock vanishes after 1 second.\nFeel the time, then hit ANY button!';
+    this.keys = KS;
+    this.tol = Math.max(0.06, 0.2 - d * 0.035);
+    this.timeMs = (this.target + 3) * 1000;
+    this.hideBar = true;
+  }
+  start() {
+    const s = this.s;
+    const g = panel(s.add.graphics(), CX - 210, CY - 95, 420, 180, 0x2a2840, 24, 10, 6);
+    this.disp = s.txt(CX, CY - 5, '0.00', 110, '#ffd23f', { ...B, weight: '900' });
+    this.goal = s.txt(CX, PLAY.y + 50, `TARGET  ${this.target}.00`, 30, '#ffffff');
+    this.tolText = s.txt(CX, CY + 140, `Within ±${this.tol.toFixed(2)}s to clear`, 20, INK, B);
+    s.L.add([g, this.disp, this.goal, this.tolText]);
+    this.t0 = s.time.now;
+  }
+  update() {
+    const el = (this.s.time.now - this.t0) / 1000;
+    this.disp.setText(el < 1 ? el.toFixed(2) : '?.??');
+  }
+  onButton() {
+    const el = (this.s.time.now - this.t0) / 1000, off = Math.abs(el - this.target);
+    const pass = off <= this.tol;
+    this.disp.setText(el.toFixed(2)).setColor(pass ? '#5dff9b' : '#ff6b6b');
+    this.bonus = pass ? Math.round((this.tol - off) * 600) : 0;
+    this.s.result(pass, `${el.toFixed(2)}s — off by ${off.toFixed(2)}`);
+  }
+  timeout() { this.s.result(false, 'Too late!'); }
+}
+
+class CopyMe {
+  constructor(s, d) {
+    Object.assign(this, { s, d, pos: 0, ready: false });
+    this.title = 'COPY ME!';
+    this.hint = 'Watch the lamps flash,\nthen press them in the same order!';
+    this.keys = KS;
+    this.len = Math.min(8, 3 + d);
+    this.timeMs = 800 + this.len * 550 + 2500 + this.len * 600;
+    this.seq = Array.from({ length: this.len }, () => pick(KS));
+  }
+  start() {
+    const s = this.s;
+    this.lamps = KS.map((k, i) => {
+      const g = s.add.graphics({ x: BTNX[i], y: CY + 10 });
+      this.drawLamp(g, k, false);
+      return g;
+    });
+    this.msg = s.txt(CX, PLAY.y + 60, 'WATCH…', 40, '#ffffff', { stroke: 9 });
+    this.prog = s.txt(CX, PLAY.y + PLAY.h - 50, '', 26, INK, B);
+    s.L.add([...this.lamps, this.msg, this.prog]);
+    this.seq.forEach((k, i) => s.later(800 + i * 550, () => this.flash(k)));
+    s.later(800 + this.len * 550, () => {
+      this.ready = true;
+      this.msg.setText('YOUR TURN!').setColor('#ffd23f');
+      Sfx.ding();
+      this.showProgress();
+    });
+  }
+  drawLamp(g, k, on) {
+    g.clear().fillStyle(INKN).fillCircle(8, 10, 66);
+    g.fillStyle(on ? COL[k] : 0xe0d8c4).fillCircle(0, 0, 66);
+    if (on) g.fillStyle(0xffffff, 0.6).fillEllipse(-20, -24, 34, 20);
+    else g.fillStyle(COL[k], 0.3).fillCircle(0, 0, 40);
+    g.lineStyle(6, INKN).strokeCircle(0, 0, 66);
+  }
+  flash(k) {
+    const g = this.lamps[KS.indexOf(k)];
+    this.drawLamp(g, k, true);
+    this.s.tweens.killTweensOf(g);
+    g.setScale(1);
+    this.s.tweens.add({ targets: g, scale: 1.12, duration: 110, yoyo: true });
+    Sfx.note(k);
+    this.s.later(320, () => this.drawLamp(g, k, false));
+  }
+  showProgress() {
+    this.prog.setText(this.seq.map((_, i) => (i < this.pos ? '●' : '○')).join(' '));
+  }
+  onButton(k) {
+    if (!this.ready) return;
+    this.flash(k);
+    if (k !== this.seq[this.pos]) return this.s.result(false, 'Wrong order!');
+    this.pos++;
+    this.showProgress();
+    if (this.pos === this.len) this.s.result(true, `${this.len} in a row!`);
+  }
+}
+
+class CountChickens {
+  constructor(s, d) {
+    Object.assign(this, { s, d, ready: false });
+    this.title = 'COUNT THE CHICKENS!';
+    this.hint = 'Count the chickens running by.\nIgnore the pigs!';
+    this.keys = KS;
+    this.chickens = rand(4 + d, 6 + d * 2);
+    this.pigs = rand(2, 3 + d);
+    this.runMs = 4400;
+    this.timeMs = this.runMs + 4000;
+  }
+  start() {
+    const s = this.s;
+    const kinds = Phaser.Utils.Array.Shuffle([
+      ...Array(this.chickens).fill('chicken'), ...Array(this.pigs).fill('pig'),
+    ]);
+    const span = this.runMs - 2000;
+    kinds.forEach((kind, i) => {
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      const y = rand(PLAY.y + 110, PLAY.y + PLAY.h - 60);
+      const c = kind === 'chicken' ? this.chicken() : this.pig();
+      c.setPosition(dir > 0 ? PLAY.x - 60 : PLAY.x + PLAY.w + 60, y).setScale(dir, 1);
+      s.L.add(c);
+      const delay = (i * span) / kinds.length + rand(0, 150);
+      s.tweens.add({
+        targets: c, x: dir > 0 ? PLAY.x + PLAY.w + 60 : PLAY.x - 60,
+        delay, duration: Math.max(800, rand(1300, 1800) - this.d * 90),
+        onStart: () => (kind === 'chicken' ? Sfx.cluck() : Sfx.oink()),
+      });
+      s.tweens.add({ targets: c, y: y - 12, delay, duration: 110, yoyo: true, repeat: -1 });
+    });
+    this.msg = s.txt(CX, PLAY.y + 44, 'COUNT!', 34, '#ffffff');
+    s.L.add(this.msg);
+    s.later(this.runMs, () => this.ask());
+  }
+  chicken() {
+    const g = this.s.add.graphics();
+    g.lineStyle(4, INKN).lineBetween(-6, 18, -8, 32).lineBetween(8, 18, 9, 32);
+    g.fillStyle(INKN).fillEllipse(4, 6, 58, 46);
+    g.fillStyle(0xffffff).fillTriangle(-24, -2, -40, -20, -30, 10);
+    g.lineStyle(4, INKN).strokeTriangle(-24, -2, -40, -20, -30, 10);
+    g.fillStyle(0xffffff).fillEllipse(0, 2, 58, 46);
+    g.lineStyle(4, INKN).strokeEllipse(0, 2, 58, 46);
+    g.lineStyle(4, INKN).beginPath().arc(-2, 2, 13, 0.3, 2.6).strokePath();
+    g.fillStyle(COL.r).fillCircle(15, -34, 7).fillCircle(24, -36, 7);
+    g.fillStyle(0xffffff).fillCircle(20, -20, 14);
+    g.lineStyle(4, INKN).strokeCircle(20, -20, 14);
+    g.fillStyle(YEL).fillTriangle(32, -25, 46, -18, 32, -13);
+    g.lineStyle(3, INKN).strokeTriangle(32, -25, 46, -18, 32, -13);
+    g.fillStyle(INKN).fillCircle(24, -22, 3);
+    return this.s.add.container(0, 0, [g]);
+  }
+  pig() {
+    const g = this.s.add.graphics();
+    g.lineStyle(7, INKN).lineBetween(-16, 14, -16, 30).lineBetween(14, 14, 14, 30);
+    g.lineStyle(4, INKN).beginPath().arc(-38, -6, 6, 0, Math.PI * 1.6).strokePath();
+    g.fillStyle(INKN).fillEllipse(4, 4, 66, 46);
+    g.fillStyle(PINK).fillEllipse(0, 0, 66, 46);
+    g.lineStyle(4, INKN).strokeEllipse(0, 0, 66, 46);
+    g.fillStyle(PINK).fillTriangle(18, -20, 26, -36, 34, -18);
+    g.lineStyle(4, INKN).strokeTriangle(18, -20, 26, -36, 34, -18);
+    g.fillStyle(PINK).fillCircle(28, -4, 18);
+    g.lineStyle(4, INKN).strokeCircle(28, -4, 18);
+    g.fillStyle(0xff7aa2).fillEllipse(44, 0, 14, 14);
+    g.lineStyle(3, INKN).strokeEllipse(44, 0, 14, 14);
+    g.fillStyle(INKN).fillCircle(42, -1, 1.8).fillCircle(46, -1, 1.8).fillCircle(32, -10, 3);
+    return this.s.add.container(0, 0, [g]);
+  }
+  ask() {
+    const c = this.chickens;
+    const wrong = Phaser.Utils.Array.Shuffle([c - 2, c - 1, c + 1, c + 2].filter(n => n > 0)).slice(0, 2);
+    this.opts = Phaser.Utils.Array.Shuffle([c, ...wrong]);
+    this.s.setButtonLabels(this.opts);
+    this.msg.setText('HOW MANY CHICKENS?');
+    const icon = this.chicken().setPosition(CX, CY).setScale(2.2);
+    const q = this.s.txt(CX + 95, CY - 70, '?', 80, '#ffd23f', { stroke: 12 });
+    this.s.L.add([icon, q]);
+    Sfx.ding();
+    this.ready = true;
+  }
+  onButton(k) {
+    if (!this.ready) return;
+    const pass = this.opts[KS.indexOf(k)] === this.chickens;
+    this.s.result(pass, pass ? `Yes — ${this.chickens} chickens!` : `It was ${this.chickens}!`);
+  }
+}
+
+const GAMES = [Pump, QuickDraw, InkColor, StopClock, CopyMe, CountChickens];
+
+// ---------------- main scene ----------------
+
+class Bishi extends Phaser.Scene {
+  constructor() { super('bishi'); }
 
   create() {
     this.makeTextures();
-    this.makeBackground();
+    this.bg = this.add.tileSprite(0, 0, W, H, 'dots').setOrigin(0);
+    this.best = Number(store.get('bishi-best')) || 0;
+    this.roundTimers = [];
+    this.makeHeader();
+    this.makePlayArea();
+    this.makeTimer();
+    this.makeButtons();
+    this.input.keyboard.on('keydown', e => {
+      const k = KEYMAP[e.code];
+      if (!k) return;
+      e.preventDefault();
+      if (!e.repeat) this.press(k);
+    });
+    this.showTitle();
+  }
 
-    this.best = Number(store.get('snake-best')) || 0;
+  // ---------- building blocks ----------
 
-    this.add.text(W / 2, 64, 'Snake', {
-      fontFamily: FONT, fontSize: '56px', fontStyle: 'bold', color: '#ffffff',
-    }).setOrigin(0.5).setShadow(0, 4, 'rgba(0,0,0,0.4)', 12);
+  txt(x, y, s, size, color, o = {}) {
+    const t = this.add.text(x, y, s, {
+      fontFamily: o.font || HEAD, fontSize: `${size}px`, fontStyle: o.weight || '',
+      color, align: 'center', stroke: o.strokeColor || INK,
+      strokeThickness: o.stroke ?? Math.round(size / 7), padding: { x: 10, y: 10 },
+    }).setOrigin(o.ox ?? 0.5, o.oy ?? 0.5);
+    const sh = o.shadow ?? Math.max(3, Math.round(size / 14));
+    if (sh) t.setShadow(sh, sh, INK, 0, true, true);
+    if (o.fit && t.width > o.fit) t.setScale(o.fit / t.width);
+    return t;
+  }
 
-    this.muteBtn = this.add.text(W - 34, 34, '🔊', { fontSize: '28px' })
+  makeTextures() {
+    const g = this.make.graphics({ add: false });
+    g.fillStyle(CREAM).fillRect(0, 0, 22, 22);
+    g.fillStyle(0xf5d27e);
+    [[11, 11], [0, 0], [22, 0], [0, 22], [22, 22]].forEach(([x, y]) => g.fillCircle(x, y, 3.2));
+    g.generateTexture('dots', 22, 22);
+    g.destroy();
+  }
+
+  makeHeader() {
+    this.add.graphics().fillStyle(INKN).fillRect(0, 0, W, 96)
+      .fillStyle(YEL).fillRect(0, 96, W, 8);
+    this.txt(24, 30, 'SCORE', 16, '#ffd23f', { ...B, ox: 0 });
+    this.scoreText = this.txt(24, 64, '0', 32, '#ffffff', { stroke: 0, shadow: 0, ox: 0 });
+    this.txt(W - 24, 30, 'ROUND', 16, '#ffd23f', { ...B, ox: 1 });
+    this.roundText = this.txt(W - 24, 64, '-', 32, '#ffffff', { stroke: 0, shadow: 0, ox: 1 });
+    this.hearts = this.add.graphics();
+    this.muteBtn = this.add.text(W - 150, 48, '🔊', { fontSize: '26px' })
       .setOrigin(0.5).setInteractive({ useHandCursor: true })
       .on('pointerdown', () => {
         Sfx.muted = !Sfx.muted;
         this.muteBtn.setText(Sfx.muted ? '🔇' : '🔊');
       });
-
-    this.cards = {
-      score: this.makeCard(W / 2 - 170, 160, 'SCORE', '#7dffb6'),
-      length: this.makeCard(W / 2, 160, 'LENGTH', '#c9c3ff'),
-      best: this.makeCard(W / 2 + 170, 160, 'BEST', '#ffc857'),
-    };
-    this.cards.best.value.setText(String(this.best));
-
-    const board = this.add.graphics();
-    board.fillStyle(0xffffff, 0.04).fillRoundedRect(BX - 12, BY - 12, BOARD + 24, BOARD + 24, 24)
-      .lineStyle(2, 0xffffff, 0.14).strokeRoundedRect(BX - 12, BY - 12, BOARD + 24, BOARD + 24, 24);
-    for (let y = 0; y < N; y++) {
-      for (let x = 0; x < N; x++) {
-        board.fillStyle(0xffffff, (x + y) % 2 ? 0.045 : 0.075)
-          .fillRoundedRect(BX + x * PITCH, BY + y * PITCH, CELL, CELL, 12);
-      }
-    }
-
-    this.foodG = this.add.graphics();
-    this.addGlow(this.foodG, FOOD, 6);
-    this.snakeG = this.add.graphics();
-    this.addGlow(this.snakeG, HEAD, 3);
-
-    this.emitter = this.add.particles(0, 0, 'spark', {
-      speed: { min: 100, max: 380 },
-      angle: { min: 0, max: 360 },
-      lifespan: { min: 450, max: 900 },
-      scale: { start: 0.9, end: 0 },
-      gravityY: 250,
-      blendMode: 'ADD',
-      emitting: false,
-    }).setDepth(10);
-
-    this.add.text(W / 2, H - 52, 'Arrows / WASD or swipe  ·  Space to pause  ·  Edges wrap around', {
-      fontFamily: FONT, fontSize: '17px', color: '#ffffff',
-    }).setOrigin(0.5).setAlpha(0.5);
-
-    this.makeOverlay();
-    this.setupInput();
-    this.reset();
   }
 
-  // ---------- visuals ----------
-
-  makeTextures() {
-    const g = this.make.graphics({ add: false });
-    g.fillStyle(0xffffff, 1).fillCircle(6, 6, 6);
-    g.generateTexture('spark', 12, 12);
-    g.destroy();
-
-    // Soft glows and the background gradient are computed per pixel with
-    // triangular dither noise, so 8-bit quantisation never shows as bands.
-    const dither = () => Math.random() + Math.random() - 1;
-
-    const S = 384;
-    this.paintTexture('orb', S, S, (x, y, px, o) => {
-      const d = Math.hypot(x - S / 2 + 0.5, y - S / 2 + 0.5) / (S / 2);
-      const edge = d >= 1 ? 0 : 1 - d * d * (3 - 2 * d);
-      const a = Math.exp(-d * d * 4.5) * edge * 0.42;
-      px[o] = px[o + 1] = px[o + 2] = 255;
-      px[o + 3] = Math.max(0, Math.min(255, Math.round(a * 255 + dither())));
-    });
-
-    const top = [0x2a, 0x16, 0x60], bottom = [0x07, 0x18, 0x2f];
-    this.paintTexture('bg', W, H, (x, y, px, o) => {
-      const t = Phaser.Math.Easing.Sine.InOut(y / (H - 1));
-      for (let c = 0; c < 3; c++) {
-        const v = top[c] + (bottom[c] - top[c]) * t + dither();
-        px[o + c] = Math.max(0, Math.min(255, Math.round(v)));
-      }
-      px[o + 3] = 255;
-    });
-  }
-
-  paintTexture(key, w, h, fn) {
-    const tex = this.textures.createCanvas(key, w, h);
-    const ctx = tex.getContext();
-    const img = ctx.createImageData(w, h);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) fn(x, y, img.data, (y * w + x) * 4);
-    }
-    ctx.putImageData(img, 0, 0);
-    tex.refresh();
-  }
-
-  makeBackground() {
-    this.add.image(0, 0, 'bg').setOrigin(0);
-    const tints = [0x7dffb6, 0x4dd6ff, 0x9b7bff, 0xff5d73];
-    for (let i = 0; i < 14; i++) {
-      const orb = this.add.image(
-        Phaser.Math.Between(0, W), Phaser.Math.Between(0, H), 'orb'
-      ).setTint(Phaser.Utils.Array.GetRandom(tints))
-        .setScale(Phaser.Math.FloatBetween(0.35, 1))
-        .setBlendMode(Phaser.BlendModes.ADD)
-        .setAlpha(0.6);
-      this.tweens.add({
-        targets: orb,
-        x: orb.x + Phaser.Math.Between(-80, 80),
-        y: orb.y + Phaser.Math.Between(-120, 120),
-        duration: Phaser.Math.Between(6000, 12000),
-        yoyo: true, repeat: -1, ease: 'Sine.InOut',
-      });
+  drawHearts() {
+    const g = this.hearts.clear();
+    for (let i = 0; i < 3; i++) {
+      const x = CX - 56 + i * 56, y = 46;
+      g.fillStyle(i < this.lives ? COL.r : 0x4a4a4a);
+      g.fillCircle(x - 9, y - 6, 11).fillCircle(x + 9, y - 6, 11)
+        .fillTriangle(x - 19.5, y - 2, x + 19.5, y - 2, x, y + 20);
     }
   }
 
-  addGlow(g, color, strength) {
-    if (g.postFX) return g.postFX.addGlow(color, strength, 0, false, 0.1, 14);
+  makePlayArea() {
+    const { x, y, w, h } = PLAY;
+    this.add.graphics().fillStyle(INKN).fillRoundedRect(x + 10, y + 10, w, h, 22)
+      .fillStyle(0xfffaf0).fillRoundedRect(x, y, w, h, 22);
+    this.L = this.add.container(0, 0);
+    const m = this.make.graphics({ add: false }).fillStyle(0xffffff).fillRoundedRect(x, y, w, h, 22);
+    this.L.setMask(m.createGeometryMask());
+    this.add.graphics().lineStyle(6, INKN).strokeRoundedRect(x, y, w, h, 22);
+    this.top = this.add.container(0, 0).setDepth(50);
   }
 
-  makeCard(x, y, label, color) {
-    const c = this.add.container(x, y);
-    const bg = this.add.graphics()
-      .fillStyle(0xffffff, 0.07).fillRoundedRect(-75, -48, 150, 96, 18)
-      .lineStyle(2, 0xffffff, 0.12).strokeRoundedRect(-75, -48, 150, 96, 18);
-    const title = this.add.text(0, -24, label, {
-      fontFamily: FONT, fontSize: '20px', fontStyle: 'bold', color,
-    }).setOrigin(0.5);
-    const value = this.add.text(0, 16, '0', {
-      fontFamily: FONT, fontSize: '40px', fontStyle: 'bold', color: '#ffffff',
-    }).setOrigin(0.5);
-    c.add([bg, title, value]);
-    return { container: c, value };
+  makeTimer() {
+    this.timerFrame = panel(this.add.graphics(), PLAY.x, TIMER_Y, PLAY.w, 30, 0xffffff, 15, 6, 5);
+    this.timerFill = this.add.graphics();
   }
 
-  setCard(key, v, bump = false) {
-    const card = this.cards[key];
-    card.value.setText(String(v));
-    if (bump) this.tweens.add({ targets: card.container, scale: 1.1, duration: 120, yoyo: true });
+  drawTimer(f) {
+    const g = this.timerFill.clear(), w = (PLAY.w - 12) * Phaser.Math.Clamp(f, 0, 1);
+    if (w < 2) return;
+    g.fillStyle(f > 0.3 ? YEL : COL.r).fillRoundedRect(PLAY.x + 6, TIMER_Y + 6, w, 18, Math.min(9, w / 2));
   }
 
-  makeOverlay() {
-    const cx = W / 2, cy = BY + BOARD / 2;
-    this.overlay = this.add.container(cx, cy).setDepth(20);
-    const panel = this.add.graphics()
-      .fillStyle(0x0d0b24, 0.78).fillRoundedRect(-220, -95, 440, 190, 26)
-      .lineStyle(2, 0xffffff, 0.2).strokeRoundedRect(-220, -95, 440, 190, 26);
-    this.overlayTitle = this.add.text(0, -32, '', {
-      fontFamily: FONT, fontSize: '42px', fontStyle: 'bold', color: '#ffffff',
-    }).setOrigin(0.5);
-    this.overlaySub = this.add.text(0, 32, '', {
-      fontFamily: FONT, fontSize: '20px', color: '#ffffff', align: 'center',
-    }).setOrigin(0.5).setAlpha(0.8);
-    this.overlay.add([panel, this.overlayTitle, this.overlaySub]);
+  showTimer(on) {
+    this.timerFrame.setVisible(on);
+    this.timerFill.setVisible(on);
   }
 
-  showOverlay(title, sub, color = '#ffffff') {
-    this.overlayTitle.setText(title).setColor(color);
-    this.overlaySub.setText(sub);
-    this.overlay.setVisible(true).setAlpha(0).setScale(0.85);
-    this.tweens.add({ targets: this.overlay, alpha: 1, scale: 1, duration: 260, ease: 'Back.Out' });
-  }
-
-  hideOverlay() {
-    this.tweens.add({
-      targets: this.overlay, alpha: 0, scale: 0.9, duration: 160,
-      onComplete: () => this.overlay.setVisible(false),
+  makeButtons() {
+    this.btns = {};
+    KS.forEach((k, i) => {
+      const x = BTNX[i];
+      const base = this.add.graphics({ x, y: BTNY });
+      base.fillStyle(INKN).fillCircle(6, 12, 74)
+        .fillStyle(0xe9e2d0).fillCircle(0, 0, 74)
+        .lineStyle(6, INKN).strokeCircle(0, 0, 74);
+      base.setInteractive(new Phaser.Geom.Circle(0, 0, 74), Phaser.Geom.Circle.Contains)
+        .on('pointerdown', () => this.press(k));
+      const cg = this.add.graphics();
+      cg.fillStyle(INKN).fillCircle(0, 9, 56)
+        .fillStyle(COL[k]).fillCircle(0, 0, 56)
+        .lineStyle(6, INKN).strokeCircle(0, 0, 56)
+        .fillStyle(0xffffff, 0.55).fillEllipse(-18, -24, 30, 16);
+      const label = this.txt(0, 0, '', 44, '#ffffff', { stroke: 8, shadow: 3 });
+      const cap = this.add.container(x, BTNY - 8, [cg, label]);
+      this.txt(x, BTNY + 94, KEYHINT[i], 15, INK, B);
+      this.btns[k] = { cap, label };
     });
   }
 
-  drawSnake(flash = null) {
-    const g = this.snakeG.clear();
-    const n = this.snake.length;
-    const pad = 5, size = CELL - pad * 2;
-    const head = Phaser.Display.Color.ValueToColor(HEAD), tail = Phaser.Display.Color.ValueToColor(TAIL);
-    const colorAt = i => {
-      if (flash !== null) return flash;
-      const c = Phaser.Display.Color.Interpolate.ColorWithColor(head, tail, Math.max(n - 1, 1), i);
-      return Phaser.Display.Color.GetColor(c.r, c.g, c.b);
-    };
+  setButtonLabels(arr) {
+    KS.forEach((k, i) => this.btns[k].label.setText(arr ? String(arr[i]) : ''));
+  }
 
-    // Draw tail first so the head sits on top; bridge the gap between
-    // neighbouring segments unless the pair straddles a wrapped edge.
-    for (let i = n - 1; i >= 0; i--) {
-      const s = this.snake[i], p = cellCenter(s.x, s.y);
-      g.fillStyle(colorAt(i), 1);
-      if (i < n - 1) {
-        const t = this.snake[i + 1];
-        if (Math.abs(t.x - s.x) + Math.abs(t.y - s.y) === 1) {
-          const q = cellCenter(t.x, t.y), hz = p.y === q.y;
-          g.fillRect(
-            hz ? Math.min(p.x, q.x) : p.x - size / 2,
-            hz ? p.y - size / 2 : Math.min(p.y, q.y),
-            hz ? Math.abs(q.x - p.x) : size,
-            hz ? size : Math.abs(q.y - p.y));
-        }
-      }
-      const r = i === 0 ? 18 : 14;
-      g.fillRoundedRect(p.x - size / 2, p.y - size / 2, size, size, r);
+  press(k) {
+    Sfx.init();
+    const { cap } = this.btns[k];
+    this.tweens.killTweensOf(cap);
+    cap.y = BTNY + 2;
+    this.tweens.add({ targets: cap, y: BTNY - 8, duration: 140, ease: 'Back.Out' });
+    Sfx.btn(k);
+    if (this.state === 'title') this.startRun();
+    else if (this.state === 'over') { if (this.canRestart) this.startRun(); }
+    else if (this.state === 'play') this.mg.onButton(k);
+  }
+
+  later(ms, fn) {
+    const e = this.time.delayedCall(ms, fn);
+    this.roundTimers.push(e);
+    return e;
+  }
+
+  clearRound() {
+    this.roundTimers.forEach(e => e.remove());
+    this.roundTimers = [];
+    this.tweens.killTweensOf([...this.L.list, ...this.top.list]);
+    this.L.removeAll(true);
+    this.top.removeAll(true);
+    this.setButtonLabels(null);
+  }
+
+  addBurst(colors = [YEL, ORANGE]) {
+    const g = this.add.graphics({ x: CX, y: CY });
+    const n = 28, R = 700;
+    for (let i = 0; i < n; i++) {
+      const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
+      g.fillStyle(colors[i % 2]).fillTriangle(0, 0, Math.cos(a0) * R, Math.sin(a0) * R, Math.cos(a1) * R, Math.sin(a1) * R);
     }
-
-    // Eyes look the way the snake is heading.
-    const h = this.snake[0], p = cellCenter(h.x, h.y), d = this.dir;
-    const fwd = 9, side = 11;
-    [-1, 1].forEach(k => {
-      const ex = p.x + d.x * fwd + (d.y ? k * side : 0);
-      const ey = p.y + d.y * fwd + (d.x ? k * side : 0);
-      g.fillStyle(0xffffff, 1).fillCircle(ex, ey, 7);
-      g.fillStyle(0x10132b, 1).fillCircle(ex + d.x * 2.5, ey + d.y * 2.5, 3.6);
-    });
+    this.L.add(g);
+    this.tweens.add({ targets: g, angle: 360, duration: 24000, repeat: -1 });
+    return g;
   }
 
-  drawFood() {
-    const p = cellCenter(this.food.x, this.food.y);
-    this.foodG.clear().setPosition(p.x, p.y)
-      .fillStyle(FOOD, 1).fillCircle(0, 2, 17)
-      .fillStyle(0xffffff, 0.55).fillCircle(-6, -4, 5)
-      .fillStyle(0x7dffb6, 1).fillEllipse(6, -17, 12, 7);
-    this.tweens.killTweensOf(this.foodG);
-    this.foodG.setScale(0);
-    this.tweens.add({
-      targets: this.foodG, scale: 1, duration: 260, ease: 'Back.Out',
-      onComplete: () => {
-        this.tweens.add({
-          targets: this.foodG, scale: 1.12, duration: 520, yoyo: true, repeat: -1, ease: 'Sine.InOut',
-        });
-      },
-    });
+  updateHud(bump = false) {
+    this.scoreText.setText(String(this.score));
+    this.roundText.setText(String(this.round || '-'));
+    this.drawHearts();
+    if (bump) this.tweens.add({ targets: this.scoreText, scale: 1.25, duration: 120, yoyo: true });
   }
 
-  // ---------- input ----------
-
-  setupInput() {
-    this.input.keyboard.on('keydown', e => {
-      if (KEYS[e.code]) { e.preventDefault(); this.handleDir(KEYS[e.code]); }
-      else if (e.code === 'Space' || e.code === 'KeyP' || e.code === 'Enter') { e.preventDefault(); this.handleAction(); }
-    });
-
-    let start = null;
-    this.input.on('pointerdown', (p, over) => {
-      start = over.includes(this.muteBtn) ? null : { x: p.x, y: p.y };
-    });
-    this.input.on('pointerup', p => {
-      if (!start) return;
-      const dx = p.x - start.x, dy = p.y - start.y;
-      start = null;
-      if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return this.handleAction();
-      this.handleDir(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
-    });
+  slam(t, from = 2.6) {
+    t.setScale(from).setAlpha(0);
+    this.tweens.add({ targets: t, scale: 1, alpha: 1, duration: 220, ease: 'Cubic.In' });
   }
 
-  handleDir(name) {
-    const d = DIRS[name];
-    if (this.state === 'over') return this.canRestart && this.reset();
-    if (this.state === 'ready') {
-      // The body trails to the left at the start, so ignore a reverse.
-      if (d.x === -this.dir.x && d.y === -this.dir.y) return this.begin();
-      this.dir = d;
-      return this.begin();
-    }
-    if (this.state === 'paused') this.togglePause();
-    const last = this.queue.length ? this.queue[this.queue.length - 1] : this.dir;
-    if (d === last || (d.x === -last.x && d.y === -last.y) || this.queue.length >= 3) return;
-    this.queue.push(d);
-    Sfx.turn();
-  }
+  // ---------- flow ----------
 
-  handleAction() {
-    if (this.state === 'ready') this.begin();
-    else if (this.state === 'over') { if (this.canRestart) this.reset(); }
-    else this.togglePause();
-  }
-
-  togglePause() {
-    if (this.state === 'playing') {
-      this.state = 'paused';
-      this.showOverlay('Paused', 'Press Space or tap to continue');
-    } else if (this.state === 'paused') {
-      this.state = 'playing';
-      this.hideOverlay();
-    }
-  }
-
-  // ---------- game loop ----------
-
-  reset() {
-    this.snake = [{ x: 3, y: 4 }, { x: 2, y: 4 }, { x: 1, y: 4 }];
-    this.dir = DIRS.right;
-    this.queue = [];
+  showTitle() {
+    this.state = 'title';
+    this.clearRound();
+    this.showTimer(false);
+    this.lives = 3;
     this.score = 0;
-    this.stepMs = START_MS;
-    this.acc = 0;
-    this.state = 'ready';
-    this.setCard('score', 0);
-    this.setCard('length', this.snake.length);
-    this.spawnFood();
-    this.drawSnake();
-    this.showOverlay('Ready?', 'Press an arrow key or swipe to start', '#7dffb6');
+    this.round = 0;
+    this.updateHud();
+    this.addBurst();
+    const t1 = this.txt(CX, CY - 120, 'BISHI', 100, '#ffd23f', { stroke: 14, shadow: 9 });
+    const t2 = this.txt(CX, CY - 15, 'BASHI', 100, CSSC.r, { stroke: 14, shadow: 9 });
+    const jp = this.txt(CX + 170, CY - 190, 'ビシバシ!', 30, '#ffffff', { stroke: 7, shadow: 4 }).setAngle(12);
+    const info = this.txt(CX, CY + 85, '6 crazy mini games · 3 lives · it keeps getting faster',
+      19, INK, { ...B, stroke: 6, strokeColor: '#ffffff' });
+    const best = this.txt(CX, CY + 125, `BEST  ${this.best}`, 22, '#ffffff', { stroke: 6, shadow: 3 });
+    const go = this.txt(CX, CY + 195, 'PRESS ANY BUTTON!', 32, '#ffffff', { stroke: 8, shadow: 5 });
+    this.L.add([t1, t2, jp, info, best, go]);
+    this.tweens.add({ targets: [t1, t2], angle: { from: -3, to: 3 }, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.InOut' });
+    this.tweens.add({ targets: go, alpha: 0.2, duration: 450, yoyo: true, repeat: -1 });
   }
 
-  begin() {
-    this.state = 'playing';
-    this.acc = 0;
+  startRun() {
+    Object.assign(this, { score: 0, lives: 3, round: 0, diff: 0, cleared: 0, queue: [], lastGame: null });
     Sfx.start();
-    this.hideOverlay();
+    this.updateHud();
+    this.nextRound();
   }
 
-  spawnFood() {
-    const taken = new Set(this.snake.map(s => s.y * N + s.x));
-    const free = [];
-    for (let i = 0; i < N * N; i++) if (!taken.has(i)) free.push(i);
-    if (!free.length) return false;
-    const i = Phaser.Utils.Array.GetRandom(free);
-    this.food = { x: i % N, y: Math.floor(i / N) };
-    this.drawFood();
-    return true;
+  nextRound() {
+    this.clearRound();
+    this.showTimer(false);
+    let speedUp = false;
+    if (!this.queue.length) {
+      this.queue = Phaser.Utils.Array.Shuffle(GAMES.slice());
+      if (this.queue[0] === this.lastGame) this.queue.push(this.queue.shift());
+      if (this.round > 0) { this.diff++; speedUp = true; }
+    }
+    const G = this.queue.shift();
+    this.lastGame = G;
+    this.round++;
+    this.updateHud();
+    this.mg = new G(this, this.diff);
+    const intro = () => this.showIntro();
+    if (speedUp) this.showSpeedUp(intro);
+    else intro();
   }
 
-  update(time, delta) {
-    if (this.state !== 'playing') return;
-    this.acc += delta;
-    while (this.acc >= this.stepMs && this.state === 'playing') {
-      this.acc -= this.stepMs;
-      this.step();
+  showSpeedUp(cb) {
+    this.state = 'card';
+    this.clearRound();
+    this.addBurst([COL.r, 0xd92d2d]);
+    const t = this.txt(CX, CY - 30, 'SPEED UP!', 76, '#ffd23f', { stroke: 12, shadow: 8 }).setAngle(-6);
+    const sub = this.txt(CX, CY + 60, `LEVEL ${this.diff + 1}`, 34, '#ffffff', { stroke: 8 });
+    this.L.add([t, sub]);
+    this.slam(t, 3);
+    Sfx.speedUp();
+    this.cameras.main.shake(200, 0.008);
+    this.later(1400, cb);
+  }
+
+  showIntro() {
+    this.state = 'intro';
+    this.clearRound();
+    this.addBurst();
+    const mg = this.mg;
+    const rd = this.txt(CX, PLAY.y + 50, `ROUND ${this.round}`, 26, '#ffffff', { stroke: 6 });
+    const title = this.txt(W + 300, CY - 70, mg.title, 54, '#ffffff', { stroke: 10, shadow: 7, fit: 500 });
+    const hint = this.txt(CX, CY + 35, mg.hint, 22, INK, { ...B, stroke: 7, strokeColor: '#ffffff' }).setAlpha(0);
+    this.L.add([rd, title, hint]);
+    const keys = this.add.graphics();
+    mg.keys.forEach((k, i) => {
+      const x = CX + (i - (mg.keys.length - 1) / 2) * 64, y = CY + 140;
+      keys.fillStyle(INKN).fillCircle(x + 4, y + 5, 24).fillStyle(COL[k]).fillCircle(x, y, 24)
+        .lineStyle(5, INKN).strokeCircle(x, y, 24);
+    });
+    this.L.add(keys);
+    this.tweens.add({ targets: title, x: CX, duration: 380, ease: 'Back.Out' });
+    this.tweens.add({ targets: hint, alpha: 1, duration: 250, delay: 250 });
+    Sfx.intro();
+    this.later(2100, () => this.beginGame());
+  }
+
+  beginGame() {
+    this.clearRound();
+    this.state = 'play';
+    this.mg.start();
+    this.timeMax = this.timeLeft = this.mg.timeMs;
+    this.lastSec = null;
+    this.showTimer(!this.mg.hideBar);
+    this.drawTimer(1);
+  }
+
+  update(time, dt) {
+    this.bg.tilePositionX += dt * 0.015;
+    this.bg.tilePositionY += dt * 0.015;
+    if (this.state !== 'play') return;
+    if (this.mg.update) this.mg.update(dt);
+    if (this.state !== 'play') return;
+    this.timeLeft -= dt;
+    this.drawTimer(this.timeLeft / this.timeMax);
+    const sec = Math.ceil(this.timeLeft / 1000);
+    if (sec !== this.lastSec) {
+      this.lastSec = sec;
+      if (sec <= 3 && sec > 0 && !this.mg.hideBar) Sfx.tick();
+    }
+    if (this.timeLeft <= 0) {
+      if (this.mg.timeout) this.mg.timeout();
+      else this.result(false, 'Time’s up!');
     }
   }
 
-  step() {
-    if (this.queue.length) this.dir = this.queue.shift();
-    const head = this.snake[0];
-    const nx = (head.x + this.dir.x + N) % N, ny = (head.y + this.dir.y + N) % N;
-    const eating = nx === this.food.x && ny === this.food.y;
-    const body = eating ? this.snake : this.snake.slice(0, -1);
-    if (body.some(s => s.x === nx && s.y === ny)) return this.gameOver();
+  result(pass, msg) {
+    if (this.state !== 'play') return;
+    this.state = 'result';
+    this.roundTimers.forEach(e => e.remove());
+    this.roundTimers = [];
 
-    this.snake.unshift({ x: nx, y: ny });
-    if (!eating) this.snake.pop();
-    this.drawSnake();
-    if (eating) this.eat();
-  }
-
-  eat() {
-    this.score++;
-    this.stepMs = Math.max(MIN_MS, this.stepMs - SPEEDUP);
-    this.setCard('score', this.score, true);
-    this.setCard('length', this.snake.length, true);
-    Sfx.eat(this.score);
-
-    const p = cellCenter(this.food.x, this.food.y);
-    this.emitter.setParticleTint(FOOD);
-    this.emitter.explode(26, p.x, p.y);
-
-    if (this.score > this.best) {
-      this.best = this.score;
-      store.set('snake-best', this.best);
-      this.setCard('best', this.best, true);
+    if (pass) {
+      this.cleared++;
+      this.score += 100 + this.diff * 50 + (this.mg.bonus || 0);
+      Sfx.clear();
+    } else {
+      this.lives--;
+      Sfx.miss();
+      this.cameras.main.shake(260, 0.014);
     }
+    this.updateHud(pass);
 
-    if (!this.spawnFood()) this.win();
+    const g = this.add.graphics();
+    panel(g, -190, -80, 380, 160, pass ? COL.g : COL.r, 20, 10, 6);
+    const word = this.txt(0, -22, pass ? 'CLEAR!' : 'MISS!', 64, '#ffffff', { stroke: 11, shadow: 6 });
+    const sub = this.txt(0, 44, msg, 20, '#ffffff', { ...B, stroke: 5, fit: 350 });
+    const stamp = this.add.container(CX, CY, [g, word, sub]).setAngle(pass ? -8 : 8);
+    this.top.add(stamp);
+    this.slam(stamp, 2.4);
+
+    this.time.delayedCall(1500, () => (this.lives <= 0 ? this.gameOver() : this.nextRound()));
   }
 
   gameOver() {
+    this.clearRound();
+    this.showTimer(false);
     this.state = 'over';
-    Sfx.gameOver();
-    this.cameras.main.shake(260, 0.012);
-    let flashes = 0;
-    this.time.addEvent({
-      delay: 110, repeat: 5,
-      callback: () => this.drawSnake(++flashes % 2 ? FOOD : null),
-    });
     this.canRestart = false;
-    this.time.delayedCall(700, () => {
-      this.canRestart = true;
-      this.showOverlay('Game over', `Score ${this.score}  ·  press any key or tap to retry`, '#ff5d73');
-    });
-  }
-
-  win() {
-    this.state = 'over';
-    this.canRestart = true;
-    this.foodG.clear();
-    Sfx.win();
-    this.emitter.setParticleTint(HEAD);
-    for (let i = 0; i < 6; i++) {
-      this.time.delayedCall(i * 150, () => this.emitter.explode(40,
-        Phaser.Math.Between(BX, BX + BOARD), Phaser.Math.Between(BY, BY + BOARD)));
+    const record = this.score > this.best;
+    if (record) {
+      this.best = this.score;
+      store.set('bishi-best', this.best);
     }
-    this.showOverlay('You win! 🎉', 'The snake filled the whole board', '#7dffb6');
+    const rank = this.cleared >= 18 ? 'S' : this.cleared >= 12 ? 'A' : this.cleared >= 8 ? 'B' : this.cleared >= 4 ? 'C' : 'D';
+
+    this.addBurst([COL.b, 0x2668d8]);
+    const t = this.txt(CX, PLAY.y + 75, 'GAME OVER', 64, '#ffffff', { stroke: 11, shadow: 7 });
+    const ring = this.add.graphics()
+      .fillStyle(INKN).fillCircle(CX + 8, CY - 40 + 8, 82)
+      .fillStyle(YEL).fillCircle(CX, CY - 40, 82)
+      .lineStyle(7, INKN).strokeCircle(CX, CY - 40, 82);
+    const r = this.txt(CX, CY - 40, rank, 100, CSSC.r, { stroke: 12, shadow: 6 });
+    const rl = this.txt(CX + 95, CY - 115, 'RANK', 22, '#ffffff', { stroke: 6 }).setAngle(14);
+    const sc = this.txt(CX, CY + 85, `SCORE  ${this.score}`, 36, '#ffffff', { stroke: 8 });
+    const info = this.txt(CX, CY + 132,
+      `${this.cleared} rounds cleared · ${record ? 'NEW RECORD!' : `best ${this.best}`}`,
+      20, INK, { ...B, stroke: 6, strokeColor: '#ffffff' });
+    this.L.add([t, ring, r, rl, sc, info]);
+    this.slam(t, 3);
+    this.slam(r, 4);
+    Sfx.over();
+
+    this.later(1300, () => {
+      this.canRestart = true;
+      const go = this.txt(CX, CY + 200, 'PRESS ANY BUTTON!', 28, '#ffffff', { stroke: 7, shadow: 4 });
+      this.L.add(go);
+      this.tweens.add({ targets: go, alpha: 0.2, duration: 450, yoyo: true, repeat: -1 });
+    });
   }
 }
 
@@ -477,14 +789,14 @@ const start = () => new Phaser.Game({
   parent: 'game',
   width: W,
   height: H,
-  backgroundColor: '#0d0b24',
+  backgroundColor: '#fff1d0',
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
-  scene: Game,
+  scene: Bishi,
 });
 
 Promise.all([
-  document.fonts.load('700 20px Fredoka'),
-  document.fonts.load('500 20px Fredoka'),
+  document.fonts.load('400 40px "Dela Gothic One"', 'BISHI ビシバシ!'),
+  document.fonts.load('900 20px Rubik'),
 ]).catch(() => {}).finally(start);
 </script>
 </body>
