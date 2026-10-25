@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Noughts and Crosses</title>
+<style>
+  :root { --bg:#f5f5f7; --fg:#1d1d1f; --cell:#fff; --line:#d2d2d7; --x:#e5484d; --o:#0091ff; --win:#ffe58f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111113; --fg:#ededef; --cell:#1c1c1f; --line:#333338; --win:#5c4a00; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+         gap:20px; padding:16px; background:var(--bg); color:var(--fg); font-family:system-ui, sans-serif; }
+  h1 { margin:0; font-size:1.8rem; }
+  #status { font-size:1.2rem; min-height:1.5em; }
+  #board { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; width:min(90vw, 360px); aspect-ratio:1; }
+  .cell { background:var(--cell); border:2px solid var(--line); border-radius:12px; font-size:clamp(2.5rem, 14vw, 4.5rem);
+          font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--fg); }
+  .cell:disabled { cursor:default; }
+  .cell.X { color:var(--x); } .cell.O { color:var(--o); }
+  .cell.win { background:var(--win); }
+  .scores { display:flex; gap:24px; font-size:1rem; }
+  .scores span b { font-size:1.2rem; }
+  button.reset { padding:10px 22px; font-size:1rem; border-radius:999px; border:none; background:var(--fg); color:var(--bg); cursor:pointer; }
+</style>
+</head>
+<body>
+  <h1>Noughts &amp; Crosses</h1>
+  <div id="status"></div>
+  <div id="board"></div>
+  <div class="scores">
+    <span style="color:var(--x)">X: <b id="sx">0</b></span>
+    <span>Draws: <b id="sd">0</b></span>
+    <span style="color:var(--o)">O: <b id="so">0</b></span>
+  </div>
+  <button class="reset" id="reset">New game</button>
+<script>
+  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  const boardEl = document.getElementById('board'), statusEl = document.getElementById('status');
+  const scores = { X:0, O:0, D:0 };
+  let board, turn, over, starter = 'X';
+
+  const cells = Array.from({ length: 9 }, (_, i) => {
+    const b = document.createElement('button');
+    b.className = 'cell';
+    b.setAttribute('aria-label', 'Square ' + (i + 1));
+    b.onclick = () => play(i);
+    boardEl.appendChild(b);
+    return b;
+  });
+
+  function newGame() {
+    board = Array(9).fill(null); turn = starter; over = false;
+    cells.forEach(c => { c.textContent = ''; c.className = 'cell'; c.disabled = false; });
+    statusEl.textContent = turn + "'s turn";
+  }
+
+  function play(i) {
+    if (over || board[i]) return;
+    board[i] = turn;
+    cells[i].textContent = turn; cells[i].classList.add(turn); cells[i].disabled = true;
+    const line = LINES.find(([a,b,c]) => board[a] && board[a] === board[b] && board[a] === board[c]);
+    if (line) {
+      over = true; line.forEach(j => cells[j].classList.add('win'));
+      statusEl.textContent = turn + ' wins!'; scores[turn]++;
+    } else if (board.every(Boolean)) {
+      over = true; statusEl.textContent = "It's a draw"; scores.D++;
+    } else {
+      turn = turn === 'X' ? 'O' : 'X'; statusEl.textContent = turn + "'s turn";
+    }
+    if (over) {
+      cells.forEach(c => c.disabled = true);
+      starter = starter === 'X' ? 'O' : 'X';
+      document.getElementById('sx').textContent = scores.X;
+      document.getElementById('so').textContent = scores.O;
+      document.getElementById('sd').textContent = scores.D;
+    }
+  }
+
+  document.getElementById('reset').onclick = newGame;
+  newGame();
+</script>
+</body>
+</html>

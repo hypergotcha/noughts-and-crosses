@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: noughts-and-crosses
+    runtime: static
+    buildCommand: ""
+    staticPublishPath: .
